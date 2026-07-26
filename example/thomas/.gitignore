@@ -1,0 +1,5 @@
+# build artifacts (regenerate with `make`)
+triad
+kernel.bc
+kernel.spv
+thomas_spv.h

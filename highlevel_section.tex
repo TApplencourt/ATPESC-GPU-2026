@@ -1,0 +1,740 @@
+% =====================================================================
+% AFTERNOON TALK: "Higher Level Layer: SYCL / OpenMP / Kokkos"
+% Draft of the new \section{Climbing the Ladder} + Hands-on #2.
+% Story arc (4 acts): the hard way -> not magic (thomas) -> same idea /
+% 3 models / standards -> performance (async vs blocking, ordering).
+% All code snippets below were compiled + run on PVC (Max 1550), L2=0.
+% =====================================================================
+
+\section{Higher Level: Climbing the Ladder}
+
+\begin{frame}{Before we start: some terminology so we speak the same language}
+    \begin{itemize}
+        \item Work-Item, Sub-Group, Work-group
+    \end{itemize}
+\end{frame}
+
+\usetikzlibrary{fit,backgrounds,calc}
+\begin{frame}{Now we can name it: the software hierarchy}
+Same picture as the hardware sync boundary --- this time in \textbf{SYCL} words.
+Each \textbf{work-item} runs its own stream of instructions (top arrows).
+\begin{center}
+\begin{tikzpicture}[font=\scriptsize, >=Stealth,
+  wi/.style={rectangle, draw=ANLBlue!70, fill=ANLBlue!15,
+             minimum width=5.5mm, minimum height=5.5mm, inner sep=1pt},
+  sg/.style={draw=ANLGreen!75!black, fill=ANLGreen!18, rounded corners,
+             inner sep=2.6mm, line width=1pt},
+  wg/.style={draw=ANLRed!80, fill=ANLRed!6, rounded corners,
+             inner sep=4mm, line width=1pt},
+  instr/.style={->, black!55, line width=0.5pt, shorten >=0.4mm}]
+
+  % ===== Work-group 0 : two sub-groups of four work-items =====
+  \node[wi]                     (a11) {};
+  \node[wi, right=1.1mm of a11] (a12) {};
+  \node[wi, right=1.1mm of a12] (a13) {};
+  \node[wi, right=1.1mm of a13] (a14) {};
+  \node[wi, below=9mm of a11]   (a21) {};
+  \node[wi, right=1.1mm of a21] (a22) {};
+  \node[wi, right=1.1mm of a22] (a23) {};
+  \node[wi, right=1.1mm of a23] (a24) {};
+
+  % ===== Work-group 1 =====
+  \node[wi, right=50mm of a14]  (b11) {};
+  \node[wi, right=1.1mm of b11] (b12) {};
+  \node[wi, right=1.1mm of b12] (b13) {};
+  \node[wi, right=1.1mm of b13] (b14) {};
+  \node[wi, below=9mm of b11]   (b21) {};
+  \node[wi, right=1.1mm of b21] (b22) {};
+  \node[wi, right=1.1mm of b22] (b23) {};
+  \node[wi, right=1.1mm of b23] (b24) {};
+
+  % ===== Ghost work-group (0..N): invisible anchors midway between A and B =====
+  \node[wi, draw=none, fill=none] (g11) at ($(a11)!0.5!(b11)$) {};
+  \node[wi, draw=none, fill=none, right=1.1mm of g11] (g12) {};
+  \node[wi, draw=none, fill=none, right=1.1mm of g12] (g13) {};
+  \node[wi, draw=none, fill=none, right=1.1mm of g13] (g14) {};
+  \node[wi, draw=none, fill=none] (g21) at ($(a21)!0.5!(b21)$) {};
+  \node[wi, draw=none, fill=none, right=1.1mm of g21] (g22) {};
+  \node[wi, draw=none, fill=none, right=1.1mm of g22] (g23) {};
+  \node[wi, draw=none, fill=none, right=1.1mm of g23] (g24) {};
+
+  % ---- boxes: work-group FIRST, then sub-groups on top (so green shows) ----
+  \begin{scope}[on background layer]
+    % ghost work-group behind, faded + dashed
+    \node[wg, dashed, draw=ANLRed!40, fill=ANLRed!3, fit=(g11)(g24)] (wgG) {};
+    \node[sg, dashed, draw=ANLGreen!45!black!60, fill=ANLGreen!8, fit=(g11)(g14)] {};
+    \node[sg, dashed, draw=ANLGreen!45!black!60, fill=ANLGreen!8, fit=(g21)(g24)] {};
+    % solid work-groups
+    \node[wg, fit=(a11)(a24)] (wgA) {};
+    \node[wg, fit=(b11)(b24)] (wgB) {};
+    \node[sg, fit=(a11)(a14)] (sgA1) {};
+    \node[sg, fit=(a21)(a24)] (sgA2) {};
+    \node[sg, fit=(b11)(b14)] (sgB1) {};
+    \node[sg, fit=(b21)(b24)] (sgB2) {};
+  \end{scope}
+
+  % ---- instruction stream: a little arrow above every work-item ----
+  \foreach \n in {a11,a12,a13,a14,a21,a22,a23,a24,b11,b12,b13,b14,b21,b22,b23,b24}{
+    \draw[instr] ($(\n.north)+(0,4mm)$) -- ($(\n.north)+(0,0.6mm)$);
+  }
+  \node[font=\scriptsize\itshape, text=black!60, anchor=south]
+    at ($(a12.north)!0.5!(a13.north)+(0,4.5mm)$) {instructions};
+
+  % ---- work-group labels (below) ----
+  \node[anchor=north, yshift=-0.5mm] at (wgA.south) {\textbf{Work-group 0}};
+  \node[anchor=north, yshift=-0.5mm] at (wgB.south) {\textbf{Work-group N}};
+
+  % ===== "no sync" dividers flanking the ghost work-group =====
+  \draw[ANLRed, dashed, line width=0.9pt]
+    ($(wgA.north east)!0.5!(wgG.north west)$) --
+    ($(wgA.south east)!0.5!(wgG.south west)$);
+  \draw[ANLRed, dashed, line width=0.9pt]
+    ($(wgG.north east)!0.5!(wgB.north west)$) --
+    ($(wgG.south east)!0.5!(wgB.south west)$);
+  \node[ANLRed, align=center, font=\scriptsize\bfseries, fill=black!2, inner sep=1pt]
+    at ($(wgA.east)!0.5!(wgG.west)$) {NO\\sync};
+  \node[ANLRed, align=center, font=\scriptsize\bfseries, fill=black!2, inner sep=1pt]
+    at ($(wgG.east)!0.5!(wgB.west)$) {NO\\sync};
+  % ellipsis over the ghost = "work-groups 0 .. N"
+  \node[font=\Large\bfseries, text=black!35] at (wgG.center) {$\cdots$};
+\end{tikzpicture}
+\end{center}
+
+\begin{center}\scriptsize
+\tikz[baseline=-0.6ex]\node[draw=ANLBlue!70, fill=ANLBlue!15, minimum size=3mm, inner sep=0pt]{};\,\textbf{work-item} (SIMD lane)\quad
+\tikz[baseline=-0.6ex]\node[draw=ANLGreen!75!black, fill=ANLGreen!18, rounded corners, minimum size=3mm, inner sep=0pt]{};\,\textbf{sub-group}\quad
+\tikz[baseline=-0.6ex]\node[draw=ANLRed!80, fill=ANLRed!6, rounded corners, minimum size=3mm, inner sep=0pt]{};\,\textbf{work-group}
+\end{center}
+\end{frame}
+
+\begin{frame}{Now we can name it: the software hierarchy}
+\begin{itemize}
+  \item \textbf{Work-item} inside a \textbf{sub-group}: sync is fast, lanes share
+        registers (\texttt{shuffle} / cross-lane ops).
+  \item \textbf{Sub-group} inside a \textbf{work-group}: share \alert{Shared Local Memory}
+        (SLM), can \texttt{barrier()}.
+  \item Between \textbf{work-groups}: \alert{no synchronization possible} --- they are
+        independent, may not even be co-resident.
+  \item The model only guarantees \textbf{forward progress within one work-group}
+        (conceptually "one at a time"). The \alert{hardware} may run many at once ---
+        but you cannot rely on it.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Recap to previous session (hopefully)}
+\begin{itemize}
+    \item A \textbf{host program}, with a C API driving it: find device, load the binary, make a queue, allocate memory, copy, launch kernel, synchronize.
+    \item The kernel is written into a separate file.
+\end{itemize}
+This afternoon: the same thing, but with syntactic sugar\footnote{And we have enough diabetes... Please don't make your own candy factory}
+\end{frame}
+
+
+
+\begin{frame}[fragile]{[One C API to] in the darkness bind them}
+
+create/load/launch dance:
+\begin{minted}{c++}
+// Intel / OpenCL                       // NVIDIA / CUDA Driver
+clCreateProgramWithIL(spirv,...);    |   cuModuleLoad(&m, "hello.ptx");
+clCreateKernel(prog,"saxpy");        |   cuModuleGetFunction(&f,m,"saxpy");
+clSetKernelArg(...); ...             |   cuLaunchKernel(f, grid, block, ...);
+clEnqueueNDRangeKernel(q,k,...);      
+\end{minted}
+\begin{itemize}
+    \item  I will not discuss the `<<</>>>` cuda syntax. \footnote{It's not valid C. You need a special compiler pass to parse that... Thanks NVIDIA}
+    \item Explicit, just a C compiler and ... \textbf{tedious}.
+    \item Every high-level programming model is "this, wrapped." Nothing more.
+    \item Layers, layers everywhere
+\end{itemize}
+
+\end{frame}
+
+
+
+\begin{frame}{Talking about higher-level programming models\footnote{"Where is my Vulkan?" Sorry gamer people... OpenCL $\to$ Vulkan exists. Rusticl!}}
+
+\begin{center}
+\begin{tikzpicture}[
+nnode/.style={rectangle, draw=black!60, fill=red!5, minimum size=5mm},
+]
+
+\node[nnode]      (kokkos)                      {Kokkos};
+\node[nnode]      (omp)      [right=of kokkos]  {OpenMP offload};
+\node[nnode]      (stdpar)   [left=of kokkos]   {std::par};
+\node[nnode]      (py)       [below=of stdpar]  {Python};
+\node[nnode]      (opencl)   [below= of omp]     {OpenCL};
+\node[nnode]      (sycl)     [below=of opencl]     {SYCL};
+
+\node[nnode]      (ze)       [right=of omp]    {Level Zero};
+
+\node[nnode]      (hip)      [below=of ze]      {hip};
+\node[nnode]      (hsa)      [yshift=2em, right=of hip]     {hsa};
+
+\node[nnode]      (cr)       [below=of hip]     {CUDA Runtime};
+\node[nnode]      (cd)       [below=of cr]     {CUDA Driver};
+
+\draw[->,draw=olive] (kokkos) -- (omp);
+\draw[->,draw=olive] (kokkos) -- (sycl);
+\draw[->,draw=olive] (kokkos) -- (hip);
+\draw[->,draw=olive] (kokkos) -- (cr);
+
+\draw[->,draw=blue] (omp) -- (opencl);
+\draw[->,draw=blue] (omp) -- (hsa);
+\draw[->,draw=blue] (omp) -- (cd);
+\draw[->,draw=blue] (omp) -- (ze);
+
+
+\draw[->,draw=red] (sycl) -- (opencl);
+\draw[->,draw=red] (sycl) -- (ze);
+\draw[->,draw=red] (sycl) -- (hip);
+\draw[->,draw=red] (sycl) -- (cd);
+
+\draw[->] (opencl) -- (cd);
+\draw[->] (opencl) -- (ze);
+\draw[->] (opencl) -- (hsa);
+
+\draw[->, draw=orange] (hip) -- (ze);
+\draw[->, draw=orange] (hip) -- (cr);
+\draw[->, draw=orange] (hip) -- (hsa);
+
+\draw[->,draw=brown] (cr) -- (cd);
+
+% Python: mostly wraps SYCL (dpnp/dpctl) and CUDA (CuPy/PyTorch)
+\draw[->,draw=teal] (py) -- (sycl);
+\draw[->,draw=teal] (py) -- (cr);
+
+% std::par: SYCL on Intel, CUDA on NVIDIA (nvc++ -stdpar)
+\draw[->,draw=violet] (stdpar) -- (sycl);
+\draw[->,draw=violet] (stdpar) -- (cr);
+
+\end{tikzpicture}
+\end{center}
+\end{frame}
+
+
+
+\begin{frame}{Note on compilation: two compilers}
+\begin{center}
+\begin{tikzpicture}[
+    x=3.0cm, y=1.2cm, >=Stealth,
+    nnode/.style={rectangle, draw=red!60,  fill=red!5,  very thick, minimum width=1.9cm, align=center},
+    anode/.style={rectangle, draw=green!60,fill=green!5,very thick, minimum width=1.9cm, align=center},
+    inode/.style={rectangle, draw=blue!60, fill=blue!5, very thick, minimum width=1.9cm, align=center},
+  ]
+  \node[nnode] (cudac)   at (0,0)  {CUDA~C};
+  \node[nnode] (ptx)     at (1,0)  {PTX};
+  \node[nnode] (Nvidiah) at (2,0)  {Nvidia HW};
+  \node[inode] (openclc) at (0,-1) {OpenCL~C};
+  \node[inode] (spirv)   at (1,-1) {SPIR-V};
+  \node[inode] (intelh)  at (2,-1) {Intel HW};
+  \draw[->] (cudac) -- (ptx)  -- (Nvidiah);
+  \draw[->] (openclc) -- (spirv) -- (intelh);
+\end{tikzpicture}
+\end{center}
+\begin{itemize}
+    \item You can generate PTX, or SPIR-V, from multiple "source languages"
+    \item Rust, Fortran, Python, whatever.
+\end{itemize}
+\end{frame}
+
+% ------------------------------------------------------------------
+% ACT 2 --- Not magic: single source + build your own tiny layer
+% ------------------------------------------------------------------
+\begin{frame}[fragile]{Single-source: let's build our own. It's not magic}
+
+Let's build a 40-line version of this. Your own little single-source, higher-level language!\footnote{Please don't do that at home, just for illustration purposes, to remove the magic. It's not magic, just painful to maintain}
+
+\begin{itemize}
+    \item Tell the compiler what is a kernel
+    \item It will generate the SPIR-V for you
+    \item Wrap everything in a tiny runtime
+\end{itemize}
+Let me introduce you to \textsc{Thomas}:
+\begin{itemize}
+    \item \textbf{T}iny --- \textbf{H}eterogeneous --- \textbf{O}penCL ---
+          \textbf{M}acro --- \textbf{A}TPESC --- \textbf{S}PIR-V
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Single-source: let's build our own --- \textsc{Thomas}}
+
+
+Our own little single-source wrapper.\footnote{\textsc{Thomas}: \textbf{T}iny
+\textbf{H}eterogeneous \textbf{O}penCL \textbf{M}acro, \textbf{A}TPESC +
+\textbf{S}PIR-V.}
+\begin{minted}{c++}
+#include "thomas.hpp"
+KERNEL(triad, (float a, gptr<const float> x, gptr<const float> y, gptr<float> z),
+       { z[i] = x[i] + a*y[i]; })
+int main() {
+  thomas::init();                          // pick the GPU
+  float *x = thomas::alloc<float>(N);      // USM: one pointer, host + device
+  float *y = thomas::alloc<float>(N), *z = thomas::alloc<float>(N);
+  for (size_t i = 0; i < N; ++i) { x[i] = 2.0f; y[i] = 1.0f; }
+  thomas::parallel_for(N, triad, 2.0f, x, y, z);   // bind args, launch on GPU
+}
+\end{minted}
+\end{frame}
+
+\begin{frame}[fragile]{How it works: one source, compiled twice}
+The \emph{same} file is compiled twice --- the \texttt{KERNEL} macro expands
+differently each time:
+\begin{itemize}
+    \item \textbf{Device pass}: \mintinline{bash}{icpx -x cl -cl-std=clc++ -DTHOMAS_DEVICE}
+          turns the lambda into a \texttt{\_\_kernel} and lowers it to SPIR-V.
+    \item \textbf{Host pass}: plain \mintinline{bash}{icpx} keeps only the kernel
+          \emph{name}, embeds the SPIR-V, and drives OpenCL.
+    \item \texttt{gptr<T>} is \texttt{\_\_global T*} on the device, plain
+          \texttt{T*} on the host --- one signature, both passes.
+\end{itemize}
+\begin{minted}{c++}
+// DEVICE pass -- lambda body becomes a __kernel
+#define KERNEL(name, params, body) \
+  __kernel void name params { auto _k=[&](ulong i) body; _k(get_global_id(0)); }
+
+// HOST pass -- keep only the name to find the compiled kernel
+#define KERNEL(name, params, body) ::thomas::Kernel name{#name};
+\end{minted}
+\end{frame}
+
+
+
+\begin{frame}[fragile]{Not magic (2/2): the whole "runtime" is a few calls}
+The device pass emits SPIR-V; the host side just loads it and launches. That is the
+entire "runtime":
+\begin{minted}{c++}
+// load our compiled SPIR-V and JIT it for whatever device we picked
+prog = clCreateProgramWithIL(ctx, thomas_spv, thomas_spv_len, &e);
+clBuildProgram(prog, 1, &dev, ...);
+// parallel_for: bind args, launch N work-items
+clSetKernelArg(...);  clEnqueueNDRangeKernel(q, k, 1, 0, &N, ...);
+\end{minted}
+Built twice (device$\rightarrow$SPIR-V, host), the triad ran on one PVC tile ---
+right on top of SYCL, because it \emph{is} the same thing (resident USM + SPIR-V):
+\begin{minted}{text}
+THOMAS    N=1048576  min_ms=0.013  BW=960 GB/s  residual=0
+SYCL      N=1048576  min_ms=0.013  BW=960 GB/s  residual=0
+\end{minted}
+\alert{$\sim$40 lines over OpenCL + SPIR-V. That is all SYCL/Kokkos are, plus a lot of bug fixes, syntactic sugar, and runtime optimization}
+\end{frame}
+
+
+\begin{frame}{I will now show you some programming models}
+
+Comparative literature!
+
+I will show you
+\begin{itemize}
+    \item SYCL (the best)
+    \item Kokkos (the best)
+    \item OpenMP (the best)
+    \item  std-par (the best)
+    \item Python\footnote{not the best, sorry, I'm just old. Using a scripting language for HPC just seems wrong. I don't like Jupyter notebooks either, so this one is maybe on me}
+\end{itemize}
+
+\end{frame}
+
+
+\begin{frame}{The models, one by one}
+The next few slides: who backs each model, what it looks like, and what it runs
+on. Same kernel everywhere --- only the packaging changes.
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Model & Kind & Backed by \\
+\midrule
+\textbf{SYCL}       & open standard, pure C++      & Khronos \\
+\textbf{Kokkos}     & C++ portability library      & Sandia / HPSF \\
+\textbf{OpenMP}     & directive (pragma) standard  & OpenMP ARB \\
+\texttt{std::par}   & ISO C++ standard library     & ISO C++ \\
+\textbf{Python}     & array libraries / bindings   & vendors \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{frame}
+
+% ---- SYCL ------------------------------------------------------------
+\begin{frame}{SYCL --- the open C++ standard}
+\begin{itemize}
+  \item Backed by \textbf{Khronos}\footnote{The OpenCL / Vulkan / SPIR-V people.}
+        --- an open standard, not one vendor's product.
+  \item \textbf{Pure C++}: a light abstraction over the native backend, with full
+        control when you want it.
+  \item Two main implementations:
+    \begin{itemize}
+      \item \textbf{Intel oneAPI DPC++} --- \href{https://github.com/intel/llvm}{github.com/intel/llvm}
+      \item \textbf{AdaptiveCpp} (higher-level, ex-hipSYCL) ---
+            \href{https://github.com/AdaptiveCpp/AdaptiveCpp}{github.com/AdaptiveCpp/AdaptiveCpp}
+    \end{itemize}
+  \item Backends: \textbf{CUDA, OpenCL, Level~Zero, FPGA}.
+\end{itemize}
+\vfill
+{\footnotesize Spec \& overview: \href{https://www.khronos.org/sycl/}{khronos.org/sycl}}
+\end{frame}
+
+% ---- Kokkos ----------------------------------------------------------
+\begin{frame}{Kokkos --- the C++ portability library}
+\begin{itemize}
+  \item Developed at \textbf{Sandia National Laboratories}; now governed by the
+        \textbf{High Performance Software Foundation} (part of the Linux Foundation).
+  \item \textbf{C++} with a portability abstraction on top (\texttt{View},
+        execution/memory spaces).
+  \item Ships as a \textbf{library} --- super easy to install (\texttt{module load}
+        or CMake).
+  \item Backends: \textbf{SYCL, CUDA, HIP}, and an \textbf{OpenMP host} backend.
+\end{itemize}
+\vfill
+{\footnotesize Home \& docs: \href{https://kokkos.org}{kokkos.org}}
+\end{frame}
+
+% ---- OpenMP ----------------------------------------------------------
+\begin{frame}{OpenMP --- directives (pragmas)}
+\begin{itemize}
+  \item \textbf{Pragma-based}: you annotate a loop, the compiler offloads it ---
+        no library API to learn.
+  \item Works from \textbf{C, C++, and Fortran}\footnote{Sad face? Happy face? I
+        let you decide.} --- the only model here that covers Fortran.
+  \item Descriptive: you still write the loop; the pragma says "run this on the
+        device."
+\end{itemize}
+\vfill
+{\footnotesize Spec: \href{https://www.openmp.org}{openmp.org}}
+\end{frame}
+
+% ---- std::par --------------------------------------------------------
+\begin{frame}{\texttt{std::par} --- it's just ISO C++}
+\begin{itemize}
+  \item \textbf{No pragma, no library}: parallel algorithms are in the C++
+        standard itself (C++17).
+  \item Pass an \textbf{execution policy} (\texttt{std::execution::par\_unseq})
+        to \texttt{std::for\_each}, \texttt{transform}, \ldots
+  \item The compiler/runtime decides where it runs --- on Intel, that's the GPU.
+\end{itemize}
+\vfill
+{\footnotesize Reference:
+\href{https://en.cppreference.com/w/cpp/algorithm/execution_policy_tag}{cppreference: execution policies}}
+\end{frame}
+
+% ---- Python ----------------------------------------------------------
+\begin{frame}{Python --- multiple GPU array bindings}
+\begin{itemize}
+  \item Not one thing: several \textbf{NumPy-style array libraries} that run on the GPU.
+  \item \textbf{dpnp} (Intel, SYCL/Level~Zero) ---
+        \href{https://github.com/IntelPython/dpnp}{github.com/IntelPython/dpnp}
+  \item \textbf{CuPy} (NVIDIA/AMD) ---
+        \href{https://cupy.dev}{cupy.dev}
+  \item Same \texttt{a*x + y} you'd write in NumPy --- it just lands in a GPU kernel.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Same kernel, three models --- C++ (all run on PVC)}
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\textbf{SYCL} \footnotesize(Khronos standard)
+\begin{minted}{c++}
+sycl::queue Q;
+auto x = malloc_shared<float>(N,Q); 
+auto y = malloc_shared<float>(N,Q); 
+Q.parallel_for(N, [=](auto i){
+  y[i] = a*x[i] + y[i];
+}).wait();
+\end{minted}
+\textbf{Kokkos} \footnotesize(portability library)
+\begin{minted}{c++}
+Kokkos::View<float*> x("x",N), y("y",N);
+Kokkos::parallel_for(N,
+  KOKKOS_LAMBDA(size_t i){
+    y(i) = a*x(i) + y(i);
+});
+Kokkos::fence();   // async; sync to time/read
+\end{minted}
+\end{column}
+\begin{column}{0.5\textwidth}
+\textbf{OpenMP target} \footnotesize(directives)
+\begin{minted}{c++}
+#pragma omp target teams \
+  distribute parallel for \
+  map(to:x[0:N]) map(tofrom:y[0:N])
+for (int i=0;i<N;i++)      // explicit
+  y[i] = a*x[i] + y[i];    // loop!
+\end{minted}
+\alert{Squint --- they are the same kernel.}
+Same index space, same lambda body, same
+$y = a x + y$.
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Same kernel, higher still --- standard languages \& Python}
+\begin{columns}[T]
+\begin{column}{0.52\textwidth}
+\textbf{C++ \texttt{std::par}} \footnotesize(ISO C++, no pragma)
+\begin{minted}{c++}
+std::for_each(std::execution::par_unseq,
+  idx.begin(), idx.end(),
+  [=](size_t i){ y[i]=a*x[i]+y[i]; });
+\end{minted}
+\textbf{Fortran \texttt{do concurrent}} \footnotesize(ISO Fortran)
+\begin{minted}{fortran}
+do concurrent (i = 1:N)
+   y(i) = a*x(i) + y(i)
+end do
+\end{minted}
+\end{column}
+\begin{column}{0.48\textwidth}
+\textbf{Python (dpnp)}
+\begin{minted}{python}
+import dpnp
+x = dpnp.ones(N, dtype=dpnp.float32)
+y = dpnp.full(N, 2.0, dtype=dpnp.float32)
+y = a*x + y          # runs on the GPU
+\end{minted}
+\footnotesize
+
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Some difference}
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+ & Kernel is & Data & Default submit \\
+\midrule
+SYCL           & lambda (C++)    & USM pointers / buffers   & \textbf{async} \\
+Kokkos         & lambda (C++)    & \texttt{View} + spaces   & \textbf{async} \\
+OpenMP         & \textbf{explicit loop} & \texttt{map} clauses & \textbf{blocking} \\
+\texttt{std::par} & lambda (C++) & normal containers        & \textbf{blocking} \\
+\bottomrule
+\end{tabular}
+\end{center}
+{\footnotesize OpenMP \texttt{target} is blocking by default; add \texttt{nowait}+\texttt{depend} for async.}
+{\footnotesize SYCL's default queue is the only \textbf{out-of-order} one; the rest are effectively in-order.}
+
+\begin{itemize}
+    \item \textbf{OpenMP is descriptive}: you write the loop, the pragma offloads it.
+          The others hide the loop inside \texttt{parallel\_for}.
+    \item \textbf{Async default} (SYCL/Kokkos) vs \textbf{blocking default} (OpenMP)
+          --- this drives performance (we come back to it in Act~4).
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Where does the data live? Three styles}
+The kernel is only half the story --- you also decide how memory moves.
+\begin{enumerate}
+    \item \textbf{Raw pointer, explicit.} You allocate on the device and copy
+          yourself. SYCL USM, OpenMP 6 allocation, our \textsc{thomas}.
+          Most control, most boilerplate.
+    \item \textbf{OpenMP \texttt{map} clauses.} \texttt{map(to:/from:/tofrom:)} ---
+          the runtime tracks what is already present and moves the rest. Depends on
+          the surrounding \texttt{target data} region.
+    \item \textbf{Implicit objects.} \texttt{sycl::buffer}\footnote{We will not talk about those, nobody uses those}, Kokkos \texttt{View} /
+          \texttt{DualView}, the object owns the data and the runtime moves it
+          where a kernel needs it.
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{One pointer, three flavors}
+
+\begin{center}
+\begin{tabular}{@{}ll p{4.9cm}@{}}
+\toprule
+Khronos\footnote{In Khronos land we call all three \textbf{Unified Shared Memory} (USM); it just means ``pointer access.'' \texttt{shared} and \texttt{host} are a subset of USM} & CUDA / HIP & What it means \\
+\midrule
+device memory & device memory  & only accessible by the \textbf{device} \\
+shared memory & managed memory & accessible by \textbf{host and device}; data may migrate between them \\
+host memory   & pinned memory  & accessible by \textbf{both}; data stays on the host (can speed up transfers) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\end{frame}
+
+\begin{frame}[fragile]{Kokkos adds data abstractions: \texttt{View} \& \texttt{DualView}}
+SYCL/OpenMP move data with pointers. Kokkos provides some abstractions:
+
+\begin{minted}{c++}
+Kokkos::View<float*, MemSpace> d("d", N);   // layout + space chosen for the arch
+Kokkos::DualView<float*> v("v", N);         // a host mirror AND a device copy
+v.modify_device();                          // lazy H2D: just marks dirty, 0 bytes
+v.sync_host();                              // sync, copy if required
+\end{minted}
+\begin{itemize}
+    \item \texttt{View}: memory \textbf{space} (host/device) + \textbf{layout}
+          (row/col-major) picked per architecture --- portability of data, not
+          just kernels.
+    \item \texttt{DualView}: manage the host$\leftrightarrow$device copy explicitly,
+          only sync when a side is dirty. (USM hides this; Kokkos gives you control.)
+    \item Some of these abstractions were \textbf{upstreamed into the C++ standard} ---
+          e.g.\ \texttt{std::mdspan} (C++23). It's super nice.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{\texttt{std::mdspan}: a Kokkos \texttt{View} that made it into C++23}
+A non-owning, multi-dimensional \textbf{view} over a flat buffer --- index it like
+\texttt{a(i,j)}, no manual \texttt{i*ncols+j}:
+\begin{minted}{c++}
+#include <mdspan>
+float buf[6];                                 // plain, flat storage
+std::mdspan a{buf, 2, 3};                      // view it as 2 x 3
+
+for (std::size_t i = 0; i < a.extent(0); ++i)  // extent(0)=2, extent(1)=3
+  for (std::size_t j = 0; j < a.extent(1); ++j)
+    a[i, j] = i * 10 + j;                       // C++23 multidim subscript
+\end{minted}
+\begin{itemize}
+    \item Owns \textbf{nothing} --- just shape + a pointer. Same idea as Kokkos
+          \texttt{View}, now standard.
+    \item Swap the \textbf{layout} (row- vs column-major) without touching the loop ---
+          exactly the portability trick Kokkos does per architecture.
+    \item \textbf{Fortran} has had native N-D arrays since day one (1957); C++ only
+          gets the \emph{view} now, in 2023.\footnote{Better late than never.}
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Lambda vs pragma: what the compiler has to know}
+Everyone here needs a device compiler (our \textsc{thomas} used one too:
+\texttt{-x cl -cl-std=clc++}). The real split is \textbf{how the kernel is
+represented}.
+\begin{itemize}
+    \item \textbf{SYCL / Kokkos / \texttt{std::par}: the kernel is a lambda} --- a
+          plain C++ object the library can capture, store and pass to
+          \mintinline{c++}{parallel_for}. So the layer above is ordinary library
+          code (AdaptiveCpp even has a library-only path). \alert{The \texttt{parallel\_for}
+          we wrote in \textsc{thomas} is exactly that.}
+    \item \textbf{OpenMP / \texttt{do concurrent}: the kernel is a pragma / language
+          construct.} \mintinline{c++}{#pragma omp target} is not a C++ object --- a
+          library cannot see it. The \textbf{compiler} must recognize it and emit the
+          device code.
+\end{itemize}
+\alert{Both need a toolchain to reach the device. A lambda is a value you can hand
+around; a pragma only the compiler can act on.}
+\end{frame}
+
+
+
+\begin{frame}{Let's run!}
+
+\begin{itemize}
+    \item I prepared a few code examples that do the triad
+    \item Let's run them. And let's see who is faster
+    \item And let's discuss their differences, similarities. Answer any question
+\end{itemize}
+
+\end{frame}
+
+
+\begin{frame}{Standards are good (please use them)}
+The \textbf{open, vendor-neutral} column, mostly from Khronos:
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Layer & Open standard & Proprietary cousins \\
+\midrule
+IR         & \textbf{SPIR-V}          & PTX \\
+Low-level  & \textbf{OpenCL, HSA}     & CUDA Driver, Level Zero \\
+High-level & \textbf{OpenMP, SYCL, Kokkos}            & Whatever NVIDIA and AMD are pushing for\footnote{Don't get me started on OpenACC...}.  \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}
+    \item Break free from the vendor-provided ecosystem!
+    \item The only advantage is that they work...
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Please don't reinvent the abstraction layer}
+We just saw a layer is "only" $\sim$40 lines. And then a few C++ abstractions. Easy!
+\begin{itemize}
+    \item Everyone builds their own $\Rightarrow$ \textbf{dilution of effort}: N
+          half-finished runtimes, each thin, each buggy.
+    \item Each new layer carries \textbf{workarounds for the bugs} of the layer below
+\end{itemize}
+
+\begin{itemize}
+    \item If you find a gap in the abstraction, or a bug, please \textbf{contribute to a shared one}.
+    \item Kokkos is the good example: they needed some library, they pushed it into the C++ main spec (thanks mdspan!)
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{It is already converging: one compiler, one offload runtime}
+\begin{center}
+\begin{tikzpicture}[node distance=3.5mm and 5mm, >=Stealth, font=\scriptsize,
+  b/.style={rectangle, draw=black!55, fill=black!3, minimum height=6mm, align=center},
+  h/.style={rectangle, draw=black!55, fill=ANLRed!12, minimum height=6mm, align=center}]
+  \node[b] (sycl) {SYCL};
+  \node[b, right=of sycl] (omp) {OpenMP target};
+  \node[b, right=of omp] (dc) {\texttt{std::par} / \texttt{do concurrent}};
+  \node[h, below=6mm of omp] (llvm) {LLVM: one compiler, shared offload IR / runtime};
+  \node[b, below=of llvm, xshift=-3.2cm] (l0)  {Level Zero};
+  \node[b, below=of llvm]              (cu)  {CUDA Driver};
+  \node[b, below=of llvm, xshift=3.2cm]  (hsa) {HSA / ROCm};
+  \draw[->] (sycl)--(llvm); \draw[->] (omp)--(llvm); \draw[->] (dc)--(llvm);
+  \draw[->] (llvm)--(l0); \draw[->] (llvm)--(cu); \draw[->] (llvm)--(hsa);
+\end{tikzpicture}
+\end{center}
+\begin{itemize}
+    \item SYCL is being \textbf{upstreamed into mainline LLVM} (Intel's \texttt{intel/llvm}
+          tracks LLVM \texttt{main}, ~1--2 weeks behind).
+    \item SYCL and OpenMP increasingly share the same LLVM offload plumbing\footnote{liboffload}  which route to the native backend: \textbf{Level~Zero}, \textbf{CUDA Driver}, \textbf{HSA}.
+\end{itemize}
+
+\end{frame}
+
+
+\begin{frame}{Which one should I use?}
+\begin{itemize}
+    \item \textbf{Fortran?} $\rightarrow$ \textbf{OpenMP} (or \texttt{do concurrent}
+          for standard-language offload). SYCL/Kokkos are C++-only.
+    \item \textbf{C++, want close to the metal / an open standard?} $\rightarrow$
+          \textbf{SYCL}. Lower-level, maps almost 1:1 to the native runtime.
+    \item \textbf{C++, want data abstractions (\texttt{View}, layouts, \texttt{DualView})?}
+          $\rightarrow$ \textbf{Kokkos}. Higher-level; sits on CUDA / HIP / SYCL.
+          (Portability is a wash --- all three already cover the three vendors.)
+    \item \textbf{Prototyping / data science / ML?} $\rightarrow$ \textbf{Python}
+          (PyTorch, dpnp) --- same runtime underneath (SYCL on Intel, CUDA on
+          NVIDIA; it does not reinvent either).
+\end{itemize}
+\alert{No wrong answer. Just use what you have support for.}
+\end{frame}
+
+
+\begin{frame}{Exp 2: benchmarks are always misleading}
+
+\begin{itemize}
+    \item I have 2 experiments. Watch, SYCL is the best!
+    \item Let's see if we can flip the conclusion, the result
+    \item Always take benchmarks with a grain of salt
+\end{itemize}
+
+\end{frame}
+
+
+\begin{frame}{Conclusion}
+    \begin{itemize}
+        \item "same same, but different"
+        \item If a gap exists, most probably it can be fixed in your code
+        \item If not, it's probably a bug. Please report it
+        \item My personal opinion:
+            \begin{itemize}
+                \item DON'T REINVENT ONE MORE
+                \item Use the one where you have more support
+            \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Last word}
+
+The offload model is genuinely portable: between models and between vendors,
+migration is cheap. The hard part is getting into the model. You must extract your compute kernels:
+\begin{itemize}
+    \item Isolate the kernel; hopefully an ``embarrassingly-parallel'' pure function
+    \item Port the memory management
+
+\end{itemize}
+    
+\end{frame}

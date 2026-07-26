@@ -1,0 +1,106 @@
+\documentclass[aspectratio=169]{beamer}
+%\usepackage{svg}
+\usepackage[american]{babel}
+
+\usetheme[progressbar=frametitle,numbering=fraction,subsectionpage=progressbar]{metropolis}
+\setbeamertemplate{section in toc}[sections numbered]
+%\usepackage{appendixnumberbeamer}
+\usepackage{ulem}
+\usepackage[newfloat]{minted}
+\usepackage{multicol}
+
+\setminted[bash]{xleftmargin=\parindent,fontsize=\scriptsize,baselinestretch=1,breaklines, linenos}
+\setminted[c++]{xleftmargin=\parindent,fontsize=\scriptsize,baselinestretch=1, breaklines,linenos}
+\setminted[ruby]{xleftmargin=\parindent,fontsize=\scriptsize,baselinestretch=1, breaklines,linenos}
+\setminted[fortran]{xleftmargin=\parindent,fontsize=\scriptsize,baselinestretch=1, breaklines,linenos}
+\setminted[text]{xleftmargin=\parindent,fontsize=\scriptsize,baselinestretch=1}
+
+\usepackage[export]{adjustbox}
+
+\usepackage{tikz}
+%\usetikzlibrary{positioning, matrix}
+\usetikzlibrary{matrix, positioning, arrows.meta}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+\setbeamertemplate{frame footer}{%
+  \includegraphics[height=0.5cm]{anl_logo_head.png}\hfill
+  \texttt{extremecomputingtraining.anl.gov}}
+
+\usepackage{booktabs}
+\usepackage[autostyle, english=american]{csquotes}
+\MakeOuterQuote{"}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\newcommand\blfootnote[1]{%
+  \begingroup
+  \renewcommand\thefootnote{}\footnote{#1}%
+  \addtocounter{footnote}{-1}%
+  \endgroup
+}
+
+\title{GPU Hardware Characteristics}
+\subtitle{How does that even work? (ATPESC edition)}
+
+\date{\today}
+\author{Thomas Applencourt(apl@anl.gov)}
+\titlegraphic{\hfill\includegraphics[height=1.0cm,keepaspectratio]{anl_logo_head.png}}
+
+% Argonne Color
+\definecolor{mDarkTeal}{HTML}{000000}
+\definecolor{mLightBrown}{HTML}{cb2332}
+\definecolor{ANLBlue}{HTML}{1484c7}
+\definecolor{ANLGreen}{HTML}{82c341}
+\definecolor{ANLRed}{HTML}{CD202C}   % sampled from the red of the Argonne logo
+
+\setbeamercolor{normal text2}{%
+    fg=ANLRed,
+    bg=black!2
+}
+\setbeamercolor{palette primary}{%
+  use=normal text2,
+  fg=normal text2.bg,
+  bg=normal text2.fg
+}
+\setbeamercolor{frametitle}{%
+  use=palette primary,
+  parent=palette primary
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{frame}{Outline}
+\tableofcontents[hideallsubsections]
+\end{frame}
+
+\AtBeginSection[]{
+  \begin{frame}{Outline}
+    \tableofcontents[currentsection,hideothersubsections]
+  \end{frame}
+}
+
+
+\begin{frame}{Who I'm ? (bias)}
+\begin{itemize}
+    \item Part of the Performance Enginiring Group (so we will discuss some tinming, and performance)
+    \item Worked a lot, and for a long time, on Aurora (so we will use it sorry, and we will use Intel Hardware, but everything should (is?) transferable)
+    \item Part of the SYCL Working-Group (so yeah, I like open stantard)
+\end{itemize}
+\end{frame}
+% ===== MORNING: hardware characteristics =====
+\input{hardware_section}
+
+% ===== AFTERNOON: second title slide =====
+\title{Higher Level Layer: SYCL/OpenMP/Kokkos}
+\subtitle{How does that even work? (ATPESC edition)}
+\maketitle
+
+% ===== AFTERNOON: higher-level programming models =====
+\input{highlevel_section}
+
+\input{disclaimer}
+
+\end{document}

@@ -1,0 +1,13 @@
+# build artifacts (regenerate with `make`)
+a.out
+characterisation/flops
+characterisation/peak_sol
+triad_galery/sycl_triad
+triad_galery/stdpar_triad
+triad_galery/omp_triad
+triad_galery/kokkos_triad
+triad_galery/dc_triad
+bench_to_fix/exp1
+bench_to_fix/exp1_sol
+bench_to_fix/exp2
+bench_to_fix/exp2_sol

@@ -1,0 +1,20 @@
+demo/branch_bench
+demo/lemire_cpu
+demo/mask_vs_predict
+demo/mask_vs_predict_k32
+demo/core.*
+core.*
+*.o
+demo/roofline
+demo/ilp_test
+demo/roofline_solution
+demo/roofline_both
+demo/roofline_ridge
+demo/roofline_prefetch
+demo/peak
+demo/fma_pure
+demo/flops
+*.pftrace
+
+# hands-on solutions --- revealed live via reveal.sh
+*_sol.cpp
